@@ -1,70 +1,79 @@
 'use strict';
 
 const createApplication = require('.');
-const { AuthorizationCode } = require('..');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+// API Configuration
+const API_CONFIG = {
+  baseUrl: 'https://api.getjobber.com',
+  endpoints: {
+    authorize: '/api/oauth/authorize',
+    token: '/api/oauth/token',
+    graphql: '/api/graphql'
+  }
+};
 
 // Store tokens in memory (in production, use a proper storage solution)
 let storedTokens = null;
 
 createApplication(({ app, callbackUrl }) => {
-  const client = new AuthorizationCode({
-    client: {
-      id: process.env.CLIENT_ID,
-      secret: process.env.CLIENT_SECRET,
-    },
-    auth: {
-      tokenHost: 'https://api.getjobber.com',
-      tokenPath: '/api/oauth/token',
-      authorizePath: '/api/oauth/authorize',
-    },
-    options: {
-      bodyFormat: 'form',
-      authorizationMethod: 'body'
-    }
-  });
-
-  // Authorization uri definition
-  const authorizationUri = client.authorizeURL({
-    redirect_uri: callbackUrl,
-    scope: 'notifications',
-    state: '3(#0/!~',
-  });
-
   // Initial page redirecting to GetJobber
   app.get('/auth', (req, res) => {
-    console.log(authorizationUri);
-    res.redirect(authorizationUri);
+    const authUrl = new URL(API_CONFIG.endpoints.authorize, API_CONFIG.baseUrl);
+    authUrl.searchParams.append('response_type', 'code');
+    authUrl.searchParams.append('client_id', process.env.CLIENT_ID);
+    authUrl.searchParams.append('redirect_uri', callbackUrl);
+    authUrl.searchParams.append('scope', 'notifications');
+    authUrl.searchParams.append('state', '3(#0/!~');
+
+    console.log('Authorization URL:', authUrl.toString());
+    res.redirect(authUrl.toString());
   });
 
   // Callback service parsing the authorization token and asking for the access token
   app.get('/callback', async (req, res) => {
     const { code } = req.query;
-    const options = {
-      code,
-      redirect_uri: callbackUrl,
-      grant_type: 'authorization_code'
-    };
-
+    
     try {
-      console.log('fetching token with options:', options);
-      const accessToken = await client.getToken(options);
+      const tokenResponse = await fetch(`${API_CONFIG.baseUrl}${API_CONFIG.endpoints.token}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code,
+          redirect_uri: callbackUrl,
+          client_id: process.env.CLIENT_ID,
+          client_secret: process.env.CLIENT_SECRET
+        })
+      });
+
+      if (!tokenResponse.ok) {
+        const errorData = await tokenResponse.text();
+        console.error('Token Error Response:', errorData);
+        throw new Error(`Token request failed with status ${tokenResponse.status}`);
+      }
+
+      const tokenData = await tokenResponse.json();
       
-      // Store the tokens
+      // Store the tokens - only include properties that exist in the response
       storedTokens = {
-        access_token: accessToken.token.access_token,
-        refresh_token: accessToken.token.refresh_token
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        ...(tokenData.token_type && { token_type: tokenData.token_type }),
+        ...(tokenData.expires_in && { expires_in: tokenData.expires_in }),
+        ...(tokenData.scope && { scope: tokenData.scope })
       };
 
+      console.log('Token Response:', tokenData);
+      console.log('storedTokens:', storedTokens);
       console.log('Access Token:', storedTokens.access_token);
       console.log('Refresh Token:', storedTokens.refresh_token);
 
       return res.status(200).json(storedTokens);
     } catch (error) {
-      console.error('Access Token Error', error.message);
-      if (error.response) {
-        console.error('Error response:', error.response.data);
-      }
+      console.error('Access Token Error:', error.message);
       return res.status(500).json('Authentication failed');
     }
   });
@@ -94,7 +103,7 @@ createApplication(({ app, callbackUrl }) => {
     try {
       console.log('Making GraphQL request with token:', storedTokens.access_token.substring(0, 10) + '...');
       
-      const response = await fetch('https://api.getjobber.com/api/graphql', {
+      const response = await fetch(`${API_CONFIG.baseUrl}${API_CONFIG.endpoints.graphql}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +122,7 @@ createApplication(({ app, callbackUrl }) => {
         })
       });
 
-      console.log('Request URL:', 'https://api.getjobber.com/api/graphql');
+      console.log('Request URL:', `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.graphql}`);
       console.log('Request headers:', {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
