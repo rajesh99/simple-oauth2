@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start:github": "node github.js",
     "start:microsoft": "node microsoft.js",
-    "start:dropbox": "node dropbox.js"
+    "start:dropbox": "node dropbox.js",
+    "start:getjobber": "node getjobber.js"
   },
   "keywords": [],
   "author": "",
