@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 // API Configuration
 const API_CONFIG = {
@@ -38,7 +38,7 @@ app.get('/auth', (req, res) => {
 // Callback service parsing the authorization token and asking for the access token
 app.get('/callback', async (req, res) => {
   const { code } = req.query;
-  
+
   try {
     const tokenResponse = await fetch(`${API_CONFIG.baseUrl}${API_CONFIG.endpoints.token}`, {
       method: 'POST',
@@ -61,18 +61,13 @@ app.get('/callback', async (req, res) => {
     }
 
     const tokenData = await tokenResponse.json();
-    
+
     // Store the tokens - only include properties that exist in the response
     storedTokens = {
       access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      ...(tokenData.token_type && { token_type: tokenData.token_type }),
-      ...(tokenData.expires_in && { expires_in: tokenData.expires_in }),
-      ...(tokenData.scope && { scope: tokenData.scope })
+      refresh_token: tokenData.refresh_token
     };
 
-    console.log('Token Response:', tokenData);
-    console.log('storedTokens:', storedTokens);
     console.log('Access Token:', storedTokens.access_token);
     console.log('Refresh Token:', storedTokens.refresh_token);
 
@@ -89,8 +84,9 @@ app.get('/clients', async (req, res) => {
     return res.status(401).json({ error: 'Not authenticated. Please login first.' });
   }
 
+  // Simpler query to test basic connectivity
   const query = `
-    query SampleQuery {
+    query {
       clients {
         nodes {
           id
@@ -99,32 +95,24 @@ app.get('/clients', async (req, res) => {
           billingAddress {
             city
           }
-        }
-        totalCount
       }
+    totalCount
+  }
     }
   `;
 
   try {
     console.log('Making GraphQL request with token:', storedTokens.access_token.substring(0, 10) + '...');
-    
+
     const response = await fetch(`${API_CONFIG.baseUrl}${API_CONFIG.endpoints.graphql}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        'Accept': '*/*',
         'Authorization': `Bearer ${storedTokens.access_token}`,
-        'X-API-Version': '2024-04-02',
-        'Origin': 'https://api.getjobber.com',
-        'Referer': 'https://api.getjobber.com/',
-        'X-Requested-With': 'XMLHttpRequest'
+        'X-JOBBER-GRAPHQL-VERSION': '2025-01-20'
       },
-      credentials: 'include',
-      body: JSON.stringify({ 
-        query,
-        variables: {},
-        operationName: 'SampleQuery'
-      })
+      body: JSON.stringify({ query }),
     });
 
     console.log('Request URL:', `${API_CONFIG.baseUrl}${API_CONFIG.endpoints.graphql}`);
@@ -132,48 +120,57 @@ app.get('/clients', async (req, res) => {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'Authorization': `Bearer ${storedTokens.access_token.substring(0, 10)}...`,
-      'X-API-Version': '2024-04-02',
-      'Origin': 'https://api.getjobber.com',
-      'Referer': 'https://api.getjobber.com/',
-      'X-Requested-With': 'XMLHttpRequest'
+      'X-API-Version': '2024-04-02'
     });
-    console.log('Request body:', JSON.stringify({ query, variables: {}, operationName: 'SampleQuery' }, null, 2));
+    console.log('Request body:', JSON.stringify({ query }));
 
     console.log('Response status:', response.status);
     console.log('Response headers:', response.headers.raw());
     const responseText = await response.text();
     console.log('Raw response:', responseText);
-    
+
+    // Check if the response indicates an authentication error
+    if (response.status === 401) {
+      return res.status(401).json({
+        error: 'Authentication failed',
+        details: 'The access token may be invalid or expired. Please try re-authenticating.'
+      });
+    }
+
     let data;
     try {
       data = JSON.parse(responseText);
     } catch (e) {
       console.error('Failed to parse JSON response:', e);
-      return res.status(500).json({ 
-        error: 'Failed to parse API response', 
+      return res.status(500).json({
+        error: 'Failed to parse API response',
         details: responseText,
         status: response.status,
         headers: response.headers.raw()
       });
     }
-    
+
     if (data.errors) {
       console.error('GraphQL Errors:', data.errors);
       return res.status(400).json({ errors: data.errors });
     }
 
-    if (!data.data || !data.data.clients) {
+    if (!data.data) {
       console.error('Unexpected response structure:', data);
       return res.status(500).json({ error: 'Unexpected response structure from API' });
     }
 
     return res.status(200).json(data.data);
   } catch (error) {
-    console.error('Error fetching clients:', error);
+    console.error('Error fetching account:', error);
     if (error.response) {
       console.error('Error response:', error.response.data);
     }
-    return res.status(500).json({ error: 'Failed to fetch clients', details: error.message });
+    return res.status(500).json({
+      error: 'Failed to fetch account data',
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
